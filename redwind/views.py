@@ -1,6 +1,7 @@
 from flask import Blueprint
 from flask import make_response, Markup, send_from_directory, current_app
 from flask import request, redirect, url_for, render_template, g, abort
+from werkzeug.http import http_date, generate_etag
 from redwind import imageproxy
 from redwind import util
 from redwind.extensions import db
@@ -144,16 +145,30 @@ def render_posts(title, posts, older, events=None, template='posts.jinja2'):
     atom_args.update({'feed': 'atom', '_external': True})
     atom_url = url_for(request.endpoint, **atom_args)
     atom_title = title or 'Stream'
-    return util.render_themed(template, posts=posts, title=title,
-                              older=older, atom_url=atom_url,
-                              atom_title=atom_title, events=events)
+    rv = make_response(
+        util.render_themed(template, posts=posts, title=title,
+                           older=older, atom_url=atom_url,
+                           atom_title=atom_title, events=events))
+
+    last_modified = max((p.updated for p in posts if p.updated), default=None)
+    if last_modified:
+        rv.headers['Last-Modified'] = http_date(last_modified)
+        rv.headers['Etag'] = generate_etag(rv.get_data())
+        rv.make_conditional(request)
+    return rv
 
 
 def render_posts_atom(title, feed_id, posts):
-    return make_response(
+    rv = make_response(
         render_template('posts.atom', title=title, feed_id=feed_id,
-                        posts=posts),
-        200, {'Content-Type': 'application/atom+xml; charset=utf-8'})
+                        posts=posts))
+    rv.headers['Content-Type'] = 'application/atom+xml; charset=utf-8'
+    last_modified = max((p.updated for p in posts if p.updated), default=None)
+    if last_modified:
+        rv.headers['Last-Modified'] = http_date(last_modified)
+        rv.headers['Etag'] = generate_etag(rv.get_data())
+        rv.make_conditional(request)
+    return rv
 
 
 @views.route('/')
@@ -396,8 +411,14 @@ def render_post(post):
     if post.redirect:
         return redirect(post.redirect)
 
-    return util.render_themed('post.jinja2', post=post,
-                              title=post.title_or_fallback)
+    rv = make_response(
+        util.render_themed('post.jinja2', post=post,
+                           title=post.title_or_fallback))
+    if post.updated:
+        rv.headers['Last-Modified'] = http_date(post.updated)
+        rv.headers['Etag'] = generate_etag(rv.get_data())
+        rv.make_conditional(request)
+    return rv
 
 
 @views.app_template_filter('json')
@@ -554,7 +575,7 @@ def make_absolute(url):
     if not url:
         return url
     return urllib.parse.urljoin(get_settings().site_url, url)
-    
+
 
 @views.app_template_filter('format_syndication_url')
 def format_syndication_url(url, include_rel=True):
@@ -575,6 +596,10 @@ def syndication_icon(url):
         return Markup(fmt.format('fa-facebook'))
     if util.INSTAGRAM_RE.match(url):
         return Markup(fmt.format('fa-instagram'))
+    if util.FLICKR_RE.match(url):
+        return Markup(fmt.format('fa-flickr'))
+    if util.INDIENEWS_RE.match(url):
+        return Markup(fmt.format('fa-newspaper-o'))
     return Markup(fmt.format('fa-paper-plane'))
 
 
@@ -618,6 +643,7 @@ def add_preview(content):
     instagram_regex = 'https?://instagram\.com/p/[\w\-]+/?'
     vimeo_regex = 'https?://vimeo\.com/(\d+)/?'
     youtube_regex = 'https?://(?:(?:www\.)youtube\.com/watch\?v=|youtu\.be/)([\w\-]+)'
+    img_regex = 'https?://[^\s">]*\.(?:gif|png|jpg)'
 
     m = re.search(instagram_regex, content)
     if m:
@@ -644,5 +670,9 @@ def add_preview(content):
             'src="https://www.youtube.com/embed/{}" frameborder="0" '
             'allowfullscreen></iframe>'
         ).format(content, youtube_id)
+
+    m = re.search(img_regex, content)
+    if m:
+        return '{}<img src="{}"/>'.format(content, m.group(0))
 
     return content

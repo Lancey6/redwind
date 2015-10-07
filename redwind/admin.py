@@ -77,7 +77,7 @@ def get_top_tags(n=10):
 @admin.route('/new', defaults={'type': 'note'})
 def new_post(type):
     post = Post(type)
-    post.published = datetime.datetime.utcnow()
+    post.published = post.updated = datetime.datetime.utcnow()
     post.content = ''
 
     if type == 'reply':
@@ -208,8 +208,10 @@ def save_post(post):
             post.end = end
             post.end_utcoffset = end.utcoffset()
 
+    now = datetime.datetime.utcnow()
     if not post.published or was_draft:
-        post.published = datetime.datetime.utcnow()
+        post.published = now
+    post.updated = now
 
     # populate the Post object and save it to the database,
     # redirect to the view
@@ -274,10 +276,9 @@ def save_post(post):
         post.audience = util.multiline_string_to_list(audience)
 
     tags = request.form.getlist('tags')
-    if post.post_type != "article" and post.content:
+    if post.post_type != 'article' and post.content:
         # parse out hashtags as tag links from note-like posts
-        post.content, htags = util.parse_hashtags(post.content)
-        tags += htags
+        tags += util.find_hashtags(post.content)
     tags = list(filter(None, map(util.normalize_tag, tags)))
     post.tags = [Tag.query.filter_by(name=tag).first() or Tag(tag)
                  for tag in tags]
@@ -332,11 +333,13 @@ def save_post(post):
             post.attachments.append(attachment)
 
     # pre-render the post html
-    post.content_html = util.markdown_filter(
-        post.content, img_path=post.get_image_path(),
-        person_processor=util.person_to_microcard
-        if post.post_type == 'article'
-        else util.person_to_at_name)
+    html = util.markdown_filter(post.content, img_path=post.get_image_path())
+    html = util.autolink(html)
+    if post.post_type == 'article':
+        html = util.process_people_to_microcards(html)
+    else:
+        html = util.process_people_to_at_names(html)
+    post.content_html = html
 
     if not post.id:
         db.session.add(post)

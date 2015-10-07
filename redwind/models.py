@@ -171,6 +171,7 @@ class Post(db.Model):
 
     title = db.Column(db.String(256))
     published = db.Column(db.DateTime, index=True)
+    updated = db.Column(db.DateTime)
     start_utc = db.Column(db.DateTime)
     end_utc = db.Column(db.DateTime)
     start_utcoffset = db.Column(db.Interval)
@@ -541,7 +542,7 @@ class Mention(db.Model):
     def fragment_id(self):
         return '{}-{}'.format(self.author_name.lower().replace(' ', '_') if self.author_name else 'unnamed',
                               self.id)
-        
+
     @property
     def title_or_url(self):
         return self.title or util.prettify_url(self.permalink)

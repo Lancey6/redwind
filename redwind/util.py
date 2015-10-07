@@ -1,13 +1,19 @@
-from datetime import date
 from flask import url_for, current_app
 from flask.ext.themes2 import render_theme_template, get_theme
 from markdown import markdown
+from requests.exceptions import HTTPError, SSLError
 from smartypants import smartyPants
 import bleach
+import brevity
 import bs4
-
-import datetime
 import jwt
+import mf2py
+
+from datetime import date
+import cgi
+import collections
+import datetime
+import functools
 import os
 import os.path
 import random
@@ -16,9 +22,6 @@ import requests
 
 import unicodedata
 import urllib
-
-import mf2py
-from requests.exceptions import HTTPError, SSLError
 
 
 bleach.ALLOWED_TAGS += ['img', 'p', 'br', 'marquee', 'blink']
@@ -36,17 +39,17 @@ YOUTUBE_RE = re.compile(r'https?://(?:www.)?youtube\.com/watch\?v=([\w-]+)')
 INSTAGRAM_RE = re.compile(r'https?://(?:www\.|mobile\.)?instagram\.com/p/([\w\-]+)/?')
 PEOPLE_RE = re.compile(r"\[\[([\w ]+)(?:\|([\w\-'. ]+))?\]\]")
 RELATIVE_PATH_RE = re.compile('\[([^\]]*)\]\(([^/)]+)\)')
-HASHTAG_RE = re.compile('(?<!\w)#(\w\w+)')
+INDIENEWS_RE = re.compile(r'https?://news.indiewebcamp.com/(.*)')
+FLICKR_RE = re.compile(r'https?://(?:www\.)?flickr\.com/photos/([@\w\-]+)/(\d+)/?')
 
-AT_USERNAME_RE = re.compile(r"""(?<!\w)@([a-zA-Z0-9_]+)(?=($|[\s,:;.?'")]))""")
-LINK_RE = re.compile(
-    # optional schema
-    r'\b([a-z]{3,9}://)?'
-    # hostname and port
-    r'((?:[a-z0-9\-]+\.)+[a-z]{2,4}(?::\d{2,6})?'
-    # path
-    r'(?:(?:/(?:[a-zA-Z0-9\-_~.;:$?!&%#@()/=]*[a-zA-Z0-9\-_$?#/])?)|\b))'
-)
+HASHTAG_RE = re.compile('(?<![\w&])#(\w\w+)', re.I)
+AT_USERNAME_RE = re.compile(r"""(?<![\w&])@(\w+)(?=($|[\s,:;.?!'")&-]))""", re.I)
+
+BLACKLIST_TAGS = ('a', 'script', 'pre', 'code', 'embed', 'object',
+                  'audio', 'video')
+
+USER_AGENT = 'Red Wind (https://github.com/kylewm/redwind)'
+
 
 
 def isoparse(s):
@@ -125,86 +128,52 @@ def url_to_link(url, soup):
     return a
 
 
-def person_to_at_name(contact, nick, soup):
-    if contact:
-        url = contact.url or url_for('contact_by_name', nick)
-    else:
-        url = 'https://twitter.com/' + nick
+def process_text(fn, doc, blacklist=BLACKLIST_TAGS):
+    """Process text nodes in an HTML document, skipping over nodes inside
+    blacklisted HTML tags (like <code> tags).
 
-    a_tag = soup.new_tag('a', href=url)
-    a_tag['class'] = ['microcard', 'h-card']
-    a_tag.append('@' + nick)
-    return a_tag
+    :param fn function: takes a text argument and return the processed result
+    :param doc string: the HTML document to process
+    :param blacklist iterable: tags inside which text should not be processed
 
-
-def person_to_microcard(contact, nick, soup):
-    from . import imageproxy
-    if contact:
-        url = contact.url or url_for('contact_by_name', nick)
-        a_tag = soup.new_tag('a', href=url)
-        a_tag['class'] = ['microcard', 'h-card']
-
-        image = contact.image
-        if image:
-            mcard_size = current_app.config.get('MICROCARD_SIZE', 24)
-            image = imageproxy.construct_url(image, mcard_size)
-            image_tag = soup.new_tag('img', src=image, alt='')
-            a_tag.append(image_tag)
-            a_tag.append(contact.name)
-        else:
-            a_tag.append('@' + contact.name)
-
-    else:
-        a_tag = soup.new_tag('a', href='https://twitter.com/' + nick)
-        a_tag.string = '@' + nick
-
-    return a_tag
-
-
-def bs4_sub(soup, regex, repl, blacklist):
-        """Process text elements in a BeautifulSoup document with a regex and
-        replacement string.
-
-        :param BeautifulSoup soup: the BeautifulSoup document to be
-         edited in place
-        :param string regex: a regular expression whose matches will
-         be replaced
-        :param function repl: a function that a Match object, and
-         returns text or a new HTML node
-        :param list blacklist: a list of tags whose children should
-         not be modified (<pre> for example)
-        """
-        for txt in soup.find_all(text=True):
-            if any(p.name in blacklist for p in txt.parents):
-                continue
-            nodes = []
-            start = 0
-            for m in regex.finditer(txt):
-                nodes.append(txt[start:m.start()])
-                nodes.append(repl(m))
-                start = m.end()
-            if not nodes:
-                continue
-            nodes.append(txt[start:])
-            parent = txt.parent
-            ii = parent.contents.index(txt)
-            txt.extract()
-            for offset, node in enumerate(nodes):
-                parent.insert(ii + offset, node)
-
-
-def autolink(plain, url_processor=url_to_link,
-             person_processor=person_to_microcard):
-    """Replace bare URLs in a document with an HTML <a> representation
+    :return string: the processed result
     """
-    blacklist = ('a', 'script', 'pre', 'code', 'embed', 'object',
-                      'audio', 'video')
-    soup = bs4.BeautifulSoup(plain)
+    result = []
+    pend = 0
 
-    def link_repl(m):
-        url = (m.group(1) or 'http://') + m.group(2)
-        return url_processor(url, soup)
+    opentags = collections.defaultdict(lambda: 0)
+    for m in re.finditer('</?(\w+)[^>]*>', doc, re.I):
+        head = doc[pend:m.start()]
+        result.append(
+            head if any(opentags[tagname] > 0 for tagname in blacklist)
+            else fn(head))
 
+        tag = m.group()
+        tagname = m.group(1).lower()
+        if not tag.endswith('/>'):
+            opentags[tagname] += -1 if tag.startswith('</') else 1
+
+        result.append(tag)
+        pend = m.end()
+
+    result.append(fn(doc[pend:]))
+    return ''.join(filter(None, result))
+
+
+def autolink(text):
+    def link_hashtag(m):
+        return '<a href="/tags/{}">{}</a>'.format(
+            m.group(1).lower(), m.group())
+
+    def link_hashtags(span):
+        return HASHTAG_RE.sub(link_hashtag, span)
+
+    text = process_text(link_hashtags, text)
+    text = process_text(brevity.autolink, text)
+    return text
+
+
+def process_people(fn, plain):
     def process_nick(m):
         from .extensions import db
         from .models import Nick
@@ -212,18 +181,58 @@ def autolink(plain, url_processor=url_to_link,
         nick = Nick.query.filter(
             db.func.lower(Nick.name) == db.func.lower(name)).first()
         contact = nick and nick.contact
-        processed = person_processor(contact, name, soup)
-        if processed:
-            return processed
-        return m.group(0)
+        processed = fn(contact, name)
+        return processed if processed else m.group()
 
-    if url_processor:
-        bs4_sub(soup, LINK_RE, link_repl, blacklist)
+    def process_span(text):
+        return AT_USERNAME_RE.sub(process_nick, text)
 
-    if person_processor:
-        bs4_sub(soup, AT_USERNAME_RE, process_nick, blacklist)
+    return process_text(process_span, plain)
 
-    return ''.join(str(t) for t in soup.body.contents) if soup.body else ''
+
+def process_people_to_microcards(plain):
+    def to_microcard(contact, nick):
+        from . import imageproxy
+        if contact:
+            url = contact.url or url_for('contact_by_name', nick)
+            result = '<a class="microcard h-card" href="{}">'.format(url)
+
+            image = contact.image
+            if image:
+                mcard_size = current_app.config.get('MICROCARD_SIZE', 24)
+                image = cgi.escape(imageproxy.construct_url(image, mcard_size))
+                result += '<img alt="" src="{}" />'.format(image)
+                result += contact.name
+            else:
+                result += '@' + contact.name
+            return result + '</a>'
+
+        return ('<a class="microcard h-card" '
+                'href="https://twitter.com/{}">@{}</a>'.format(nick, nick))
+
+    return process_people(to_microcard, plain)
+
+
+def process_people_to_at_names(plain):
+    def to_at_name(contact, nick):
+        if contact:
+            url = contact.url or url_for('contact_by_name', nick)
+        else:
+            url = 'https://twitter.com/' + nick
+        return '<a class="microcard h-card" href="{}">@{}</a>'.format(
+            url, nick)
+    return process_people(to_at_name, plain)
+
+
+def find_hashtags(plain):
+    """Finds hashtags in a document and returns a list of tags encountered
+    """
+    def fn(tags, text):
+        tags += HASHTAG_RE.findall(text)
+
+    tags = []
+    process_text(functools.partial(fn, tags), plain)
+    return [t.lower() for t in tags]
 
 
 TAG_TO_TYPE = {
@@ -316,8 +325,7 @@ def multiline_string_to_list(s):
     return [l.strip() for l in s.split('\n') if l.strip()]
 
 
-def markdown_filter(data, img_path=None, url_processor=url_to_link,
-                    person_processor=person_to_microcard):
+def markdown_filter(data, img_path=None):
     if data is None:
         return ''
 
@@ -327,8 +335,6 @@ def markdown_filter(data, img_path=None, url_processor=url_to_link,
 
     data = convert_legacy_people_to_at_names(data)
     result = markdown(data, extensions=['codehilite', 'fenced_code'])
-    if url_processor or person_processor:
-        result = autolink(result, url_processor, person_processor)
     result = smartyPants(result)
     return result
 
@@ -351,22 +357,33 @@ def convert_legacy_people_to_at_names(data):
 def format_as_text(html, link_fn=None):
     if html is None:
         return ''
-    soup = bs4.BeautifulSoup(html)
 
+    # collapse whitespace
+    html = re.sub(r'\s\s+', ' ', html, re.MULTILINE)
+
+    soup = bs4.BeautifulSoup(html)
     # replace links with the URL
     for a in soup.find_all('a'):
         if link_fn:
             link_fn(a)
-        elif a.text[:1] == '#':
-            a.replace_with(a.text)
         else:
-            a.replace_with(a.get('href') or '[link]')
+            a.replace_with(a.text)
+
+    for br in soup.find_all('br'):
+        br.replace_with('\n')
+
+    for p in soup.find_all('p'):
+        p.append('\n\n')
+        p.unwrap()
 
     # and remove images
     for i in soup.find_all('img'):
         i.hidden = True
 
-    return soup.get_text().strip()
+    result = soup.get_text().strip()
+    # remove spaces before or after a linebreak
+    result = re.sub(r' *(\n+) *', r'\1', result)
+    return result
 
 
 def is_cached_current(original, cached):
@@ -393,12 +410,14 @@ def prettify_url(url):
 def fetch_html(url):
     """Utility to fetch HTML from an external site. If the Content-Type
     header does not explicitly list a charset, Requests will assume a
-    bad one, so we ahve to use 'get_encodings_from_content` to find
+    bad one, so we have to use 'get_encodings_from_content` to find
     the meta charset or other indications in the actual response body.
 
     Return a requests.Response
     """
-    response = requests.get(url, timeout=30)
+    response = requests.get(url, timeout=30, headers={
+        'User-Agent': USER_AGENT,
+    })
     if response.status_code // 2 == 100:
         # requests ignores <meta charset> when a Content-Type header
         # is provided, even if the header does not define a charset
@@ -471,29 +490,3 @@ def posse_post_discovery(post, regex):
         find_first_syndicated(post.repost_of),
         find_first_syndicated(post.like_of),
     )
-
-
-def parse_hashtags(s):
-    """ Parses out hashtags from a string and replaces them with links, then
-        returns the new string and a list of tags encountered
-    """
-    blacklist = ('a', 'script', 'pre', 'code', 'embed', 'object',
-                      'audio', 'video')
-    soup = bs4.BeautifulSoup(s)
-    tags = []
-
-    def process_hashtag(m):
-        url = '/tags/' + m.group(1).lower()
-        a = soup.new_tag('a', href=url)
-        a.string = m.group(0)
-
-        tags.append(m.group(1).lower())
-        
-        return a
-
-    try:
-        bs4_sub(soup, HASHTAG_RE, process_hashtag, blacklist)
-        s = ''.join(str(t) for t in soup.body.contents) if soup.body else ''
-        return s, tags
-    except TypeError:
-        return s, []

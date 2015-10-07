@@ -1,48 +1,41 @@
-import pytest
 from datetime import datetime
-from mf2util.dt import FixedOffset
 from redwind import contexts
 from redwind.models import Context
+
 
 class FakeResponse():
     def __init__(self, text):
         self.text = text
 
 
-def test_ogp_context():
+def test_ogp_context(mocker):
     """ Check that we can get Open Graph Protocol data from a document
     """
+    mocker.patch('requests.get').side_effect = Exception('requests.get is disabled')
+
     test_data = [
-        ("""
-            <meta property="og:title" content="Test Doc">
-            <meta property="og:type" content="website">
-            <meta property="og:image" content="test_image.png">
-            <meta property="og:site_name" content="Example.com">
-            <meta property="og:url" content="http://example.com">
-            <meta property="og:description" content="This is a test document">
-        """,
-        [
-            ('title','Test Doc'),
-            ('author_image','test_image.png'),
-            ('author_name','Example.com'),
-            ('permalink','http://example.com'),
-            ('content','This is a test document'),
-            ('content_plain','This is a test document'),
-        ]),
-        ("""
-            <meta property="og:title" content="Test Doc">
-        """,
-        [
-            ('title','Test Doc'),
-            ('author_image',None),
-            ('author_name',None),
-            ('permalink',None),
-            ('content',None),
-            ('content_plain',None),
-        ]),
+        ("""<meta property="og:title" content="Test Doc">
+        <meta property="og:type" content="website">
+        <meta property="og:image" content="test_image.png">
+        <meta property="og:site_name" content="Example.com">
+        <meta property="og:url" content="http://example.com">
+        <meta property="og:description" content="This is a test document">""",
+         [('title', 'Test Doc'),
+          ('author_image', 'test_image.png'),
+          ('author_name', 'Example.com'),
+          ('permalink', 'http://example.com'),
+          ('content', 'This is a test document'),
+          ('content_plain', 'This is a test document')]),
+        ("""<meta property="og:title" content="Test Doc">""",
+         [('title', 'Test Doc'),
+          ('author_image', None),
+          ('author_name', None),
+          ('permalink', None),
+          ('content', None),
+          ('content_plain', None)]),
     ]
 
-    for doc,res in test_data:
+    for doc, res in test_data:
         context = Context()
         context = contexts.extract_ogp_context(
             context=context,
@@ -50,15 +43,16 @@ def test_ogp_context():
             url="http://example.com"
         )
 
-        for inp,out in res:
-            assert out == getattr(context,inp)
+        for inp, out in res:
+            assert out == getattr(context, inp)
 
 
-def test_mf2_context(app):
+def test_mf2_context(app, mocker):
     """ Check that we can get Microformats2 data from a document
     """
+    mocker.patch('requests.get').side_effect = Exception('requests.get is disabled')
     test_input = [
-        '', # empty test
+        '',  # empty test
         """
             <div class="h-entry">
             <h1 class="p-name">Test Article</h1>
@@ -103,8 +97,7 @@ def test_mf2_context(app):
          ('author_image', None),
          ('content', None),
          ('content_plain', None),
-         ('published', None),
-        ),
+         ('published', None)),
         (('title', 'Test Article'),
          ('url', 'http://example.com'),
          ('permalink', 'http://example.com'),
@@ -113,8 +106,7 @@ def test_mf2_context(app):
          ('author_image', None),
          ('content', 'Words words words'),
          ('content_plain', 'Words words words'),
-         ('published', None),
-        ),
+         ('published', None)),
         (('title', None),
          ('url', 'http://example.com'),
          ('permalink', 'http://example.com'),
@@ -123,8 +115,7 @@ def test_mf2_context(app):
          ('author_image', None),
          ('content', 'Words words words'),
          ('content_plain', 'Words words words'),
-         ('published', None),
-        ),
+         ('published', None)),
         (('title', 'Test Article'),
          ('url', 'http://example.com'),
          ('permalink', 'http://example.com/post1'),
@@ -133,8 +124,7 @@ def test_mf2_context(app):
          ('author_image', 'http://example.com/example.png'),
          ('content', 'Words words words'),
          ('content_plain', 'Words words words'),
-         ('published', datetime(2015,6,10,10,0)),
-        ),
+         ('published', datetime(2015, 6, 10, 10, 0))),
         (('title', 'Lorem ipsum dolor sit amet, consectetur adipiscing elit. Fusce non ultricies nulla. Quisque a tristique massa. Nullam eu mi dapibus, dictum diam vel, sodales nulla. Nulla lobortis lacus a odio mattis, tincidunt aliquet risus semper. Proin laoreet magna nec elit scelerisque gravida. Quisque nec sollicitudin eros, et gravida libero. Sed ac vehicula velit, non aliquam diam. Suspendisse tincidunt mi et justo sagittis, vitae auctor dui malesuada. Donec aliquet volutpat ex, nec molestie mauris porttitor imperdiet'),
          ('url', 'http://example.com'),
          ('permalink', 'http://example.com'),
@@ -147,15 +137,18 @@ def test_mf2_context(app):
             <p>Proin lobortis mi eu tellus molestie facilisis. Ut rhoncus placerat gravida. Suspendisse eu placerat eros, a iaculis lorem. Nulla id risus mauris. Vivamus sodales dui ac risus bibendum egestas. Pellentesque at condimentum ipsum, a iaculis nunc. Fusce commodo sodales justo eget facilisis. Donec vulputate, ex id tincidunt sollicitudin, urna justo luctus neque, sed efficitur tellus lorem ac tortor. Suspendisse potenti. Mauris non venenatis erat. Quisque massa ligula, euismod eu hendrerit ut, aliquam nec orci. Suspendisse vel est elementum, aliquet mi quis, sollicitudin ex. Maecenas lobortis felis bibendum, laoreet metus sed, facilisis diam. Sed facilisis arcu non lectus tristique placerat. Duis semper eget dui eu suscipit. Ut eleifend viverra est, ac ultrices leo pretium sit amet.</p>
             <p>Nullam nec lobortis massa, in bibendum turpis. Praesent nec dolor et neque volutpat viverra eu eget ex. Morbi a dui viverra, cursus turpis sit amet, pulvinar felis. Ut orci massa, eleifend et sagittis nec, convallis malesuada ligula. Phasellus accumsan laoreet dolor, vel lacinia turpis vestibulum vitae. Proin vitae augue sit amet dolor pellentesque eleifend in eu justo. Morbi pharetra auctor risus, vel finibus est tincidunt egestas. Aenean ac justo ac turpis accumsan maximus quis id metus. Suspendisse a lectus congue, suscipit enim a, laoreet tortor. Maecenas congue lobortis dui non suscipit. Sed a ex at ipsum volutpat vehicula. Duis ex augue, vestibulum porta lorem quis, varius imperdiet quam. Nam ut dui a elit finibus aliquam.</p>"""),
          ('content_plain', """Lorem ipsum dolor sit amet, consectetur adipiscing elit. Duis in tincidunt lectus, tincidunt mattis mi. Fusce vitae sollicitudin diam, rhoncus euismod ex. Vestibulum vehicula metus sed massa sagittis, a molestie tortor tristique. Integer vel scelerisque tellus. Fusce ornare cursus arcu, dapibus faucibus dui lacinia in. Morbi mattis commodo sem, accumsan mollis turpis ornare nec. Etiam tempus odio a tincidunt sagittis. Phasellus quis sodales libero. Quisque semper feugiat dui, id tempus nisl aliquam quis. Quisque venenatis ullaumcorper neque, ut cursus risus auctor at. Mauris a suscipit sapien. Duis eget malesuada eros. Donec nec massa id odio sodales eleifend nec sagittis justo.
-            Donec quis ligula leo. Sed vulputate egestas suscipit. Aliquam a eleifend risus. Suspendisse a iaculis justo. Fusce vitae aliquet justo. Maecenas ac turpis facilisis, lacinia libero ut, vulputate ex. Pellentesque pretium convallis ligula volutpat sodales. Aliquam erat volutpat. Integer non libero sed lorem placerat rutrum a eu turpis. Sed iaculis massa ac condimentum commodo. Praesent erat massa, iaculis eget mauris sit amet, dignissim dictum nisl. Ut tempor tincidunt vestibulum.
-            Suspendisse eu mi posuere, viverra quam quis, faucibus quam. In quis arcu urna. Cras at lectus id sapien volutpat efficitur eu sed sapien. Maecenas at ante eros. Nulla eu mauris et dolor dignissim congue eu sed diam. Proin quam orci, malesuada eu quam a, porta commodo arcu. Aliquam non nunc tincidunt, mattis ipsum eu, lobortis justo. Donec rutrum ac massa at efficitur.
-            Proin lobortis mi eu tellus molestie facilisis. Ut rhoncus placerat gravida. Suspendisse eu placerat eros, a iaculis lorem. Nulla id risus mauris. Vivamus sodales dui ac risus bibendum egestas. Pellentesque at condimentum ipsum, a iaculis nunc. Fusce commodo sodales justo eget facilisis. Donec vulputate, ex id tincidunt sollicitudin, urna justo luctus neque, sed efficitur tellus lorem ac tortor. Suspendisse potenti. Mauris non venenatis erat. Quisque massa ligula, euismod eu hendrerit ut, aliquam nec orci. Suspendisse vel est elementum, aliquet mi quis, sollicitudin ex. Maecenas lobortis felis bibendum, laoreet metus sed, facilisis diam. Sed facilisis arcu non lectus tristique placerat. Duis semper eget dui eu suscipit. Ut eleifend viverra est, ac ultrices leo pretium sit amet.
-            Nullam nec lobortis massa, in bibendum turpis. Praesent nec dolor et neque volutpat viverra eu eget ex. Morbi a dui viverra, cursus turpis sit amet, pulvinar felis. Ut orci massa, eleifend et sagittis nec, convallis malesuada ligula. Phasellus accumsan laoreet dolor, vel lacinia turpis vestibulum vitae. Proin vitae augue sit amet dolor pellentesque eleifend in eu justo. Morbi pharetra auctor risus, vel finibus est tincidunt egestas. Aenean ac justo ac turpis accumsan maximus quis id metus. Suspendisse a lectus congue, suscipit enim a, laoreet tortor. Maecenas congue lobortis dui non suscipit. Sed a ex at ipsum volutpat vehicula. Duis ex augue, vestibulum porta lorem quis, varius imperdiet quam. Nam ut dui a elit finibus aliquam."""),
-         ('published', None),
-        ),
+
+Donec quis ligula leo. Sed vulputate egestas suscipit. Aliquam a eleifend risus. Suspendisse a iaculis justo. Fusce vitae aliquet justo. Maecenas ac turpis facilisis, lacinia libero ut, vulputate ex. Pellentesque pretium convallis ligula volutpat sodales. Aliquam erat volutpat. Integer non libero sed lorem placerat rutrum a eu turpis. Sed iaculis massa ac condimentum commodo. Praesent erat massa, iaculis eget mauris sit amet, dignissim dictum nisl. Ut tempor tincidunt vestibulum.
+
+Suspendisse eu mi posuere, viverra quam quis, faucibus quam. In quis arcu urna. Cras at lectus id sapien volutpat efficitur eu sed sapien. Maecenas at ante eros. Nulla eu mauris et dolor dignissim congue eu sed diam. Proin quam orci, malesuada eu quam a, porta commodo arcu. Aliquam non nunc tincidunt, mattis ipsum eu, lobortis justo. Donec rutrum ac massa at efficitur.
+
+Proin lobortis mi eu tellus molestie facilisis. Ut rhoncus placerat gravida. Suspendisse eu placerat eros, a iaculis lorem. Nulla id risus mauris. Vivamus sodales dui ac risus bibendum egestas. Pellentesque at condimentum ipsum, a iaculis nunc. Fusce commodo sodales justo eget facilisis. Donec vulputate, ex id tincidunt sollicitudin, urna justo luctus neque, sed efficitur tellus lorem ac tortor. Suspendisse potenti. Mauris non venenatis erat. Quisque massa ligula, euismod eu hendrerit ut, aliquam nec orci. Suspendisse vel est elementum, aliquet mi quis, sollicitudin ex. Maecenas lobortis felis bibendum, laoreet metus sed, facilisis diam. Sed facilisis arcu non lectus tristique placerat. Duis semper eget dui eu suscipit. Ut eleifend viverra est, ac ultrices leo pretium sit amet.
+
+Nullam nec lobortis massa, in bibendum turpis. Praesent nec dolor et neque volutpat viverra eu eget ex. Morbi a dui viverra, cursus turpis sit amet, pulvinar felis. Ut orci massa, eleifend et sagittis nec, convallis malesuada ligula. Phasellus accumsan laoreet dolor, vel lacinia turpis vestibulum vitae. Proin vitae augue sit amet dolor pellentesque eleifend in eu justo. Morbi pharetra auctor risus, vel finibus est tincidunt egestas. Aenean ac justo ac turpis accumsan maximus quis id metus. Suspendisse a lectus congue, suscipit enim a, laoreet tortor. Maecenas congue lobortis dui non suscipit. Sed a ex at ipsum volutpat vehicula. Duis ex augue, vestibulum porta lorem quis, varius imperdiet quam. Nam ut dui a elit finibus aliquam."""),
+         ('published', None)),
     ]
 
-    for inp,out in zip(test_input, test_output):
+    for inp, out in zip(test_input, test_output):
         context = Context()
         context = contexts.extract_mf2_context(
             context=context,
@@ -163,13 +156,15 @@ def test_mf2_context(app):
             url='http://example.com'
         )
 
-        for k,v in out:
+        for k, v in out:
             assert v == getattr(context, k)
 
 
-def test_default_context(app):
+def test_default_context(app, mocker):
     """ Check that we can get basic website data as a fallback
     """
+    mocker.patch('requests.get').side_effect = Exception('requests.get is disabled')
+
     test_input = [
         FakeResponse('<title>Hello, world!</title>'),
         FakeResponse("""
@@ -186,21 +181,21 @@ def test_default_context(app):
         None,
     ]
     test_output = [
-        (('title','Hello, world!'),
-         ('permalink','http://example.com'),
-         ('url','http://example.com')),
-        (('title','Hello, world!'),
-         ('permalink','http://example.com'),
-         ('url','http://example.com')),
-        (('title',None),
-         ('permalink','http://example.com'),
-         ('url','http://example.com')),
-        (('title',None),
-         ('permalink','http://example.com'),
-         ('url','http://example.com')),
+        (('title', 'Hello, world!'),
+         ('permalink', 'http://example.com'),
+         ('url', 'http://example.com')),
+        (('title', 'Hello, world!'),
+         ('permalink', 'http://example.com'),
+         ('url', 'http://example.com')),
+        (('title', None),
+         ('permalink', 'http://example.com'),
+         ('url', 'http://example.com')),
+        (('title', None),
+         ('permalink', 'http://example.com'),
+         ('url', 'http://example.com')),
     ]
 
-    for inp,out in zip(test_input, test_output):
+    for inp, out in zip(test_input, test_output):
         context = None
         context = contexts.extract_default_context(
             context=context,
@@ -208,5 +203,5 @@ def test_default_context(app):
             url="http://example.com"
         )
 
-        for k,v in out:
+        for k, v in out:
             assert v == getattr(context, k)
